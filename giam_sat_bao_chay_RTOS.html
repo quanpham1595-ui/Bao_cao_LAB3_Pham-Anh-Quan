@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Giám sát báo cháy IoT - ESP32</title>
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+:root{--navy:#123052;--blue:#2878d0;--bg:#f3f6fa;--muted:#65758b;--green:#16864b;--red:#d93636;--orange:#e47724}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:var(--bg);color:#17263b}
+header{background:linear-gradient(120deg,#102a46,#1b5b89);color:#fff;padding:26px 20px}
+.header-inner,main{max-width:1120px;margin:auto}
+.header-inner{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.kicker{font-size:12px;letter-spacing:2px;color:#c9e3ff;font-weight:bold}
+h1{font-size:clamp(24px,4vw,34px);margin:8px 0}
+header p{margin:0;color:#dbeafe}
+.connection{display:flex;align-items:center;gap:9px;border:1px solid #ffffff55;padding:10px 14px;border-radius:30px;font-size:13px}
+.dot{width:9px;height:9px;border-radius:50%;background:#f59e0b}
+main{padding:24px 16px 38px}
+.section-head{margin:18px 0 13px}
+.section-head h2{font-size:19px;margin:0;color:var(--navy)}
+.section-head p{font-size:13px;color:var(--muted);margin:5px 0 0}
+.cards,.charts,.controls{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.card{background:#fff;border:1px solid #e3eaf2;border-radius:15px;padding:20px;box-shadow:0 5px 18px #18334d0a;min-width:0}
+.card-top{display:flex;align-items:center;gap:12px}
+.icon{width:44px;height:44px;display:grid;place-items:center;background:#edf5ff;border-radius:12px;font-size:23px}
+.label{color:var(--muted);font-size:14px;font-weight:bold}
+.value{font-size:clamp(32px,5vw,42px);font-weight:800;margin:17px 0 7px;letter-spacing:-1px}
+.gas{color:var(--orange)}.temp{color:var(--blue)}
+.hint{font-size:12px;color:var(--muted)}
+.chart-card{min-height:290px}
+.chart-title{font-weight:bold;color:var(--navy);margin:0 0 16px}
+.chart-wrap{height:220px;position:relative}
+.control-card{display:flex;align-items:center;justify-content:space-between;gap:15px;flex-wrap:wrap}
+.control-name{font-size:17px;font-weight:bold;margin-bottom:7px}
+.state{font-size:12px;font-weight:bold;color:var(--muted);background:#f1f5f9;padding:6px 10px;border-radius:20px;display:inline-block}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+button{border:0;border-radius:8px;padding:11px 14px;font-weight:bold;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}
+.on{background:#dcfce7;color:#166534}.off{background:#fee2e2;color:#991b1b}
+.mode-btn{background:#e2e8f0;color:#334155}
+.mode-btn.active{background:var(--blue);color:white}
+.panel{margin-top:18px;background:#fff;border:1px solid #e3eaf2;border-radius:14px;padding:18px}
+.fields{display:grid;grid-template-columns:2fr 1fr;gap:12px}
+label{display:block;font-size:13px;font-weight:bold;margin-bottom:7px}
+input{width:100%;padding:11px;border:1px solid #cbd5e1;border-radius:8px;font:inherit}
+.primary{background:var(--blue);color:white}.neutral{background:#e2e8f0;color:#334155}
+.log{margin-top:12px;background:#102033;color:#d7e4f5;border-radius:8px;padding:12px;font:12px Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;min-height:40px}
+.note{font-size:12px;line-height:1.65;color:var(--muted)}
+footer{text-align:center;color:var(--muted);font-size:12px;padding:18px}
+@media(max-width:650px){.cards,.charts,.controls,.fields{grid-template-columns:1fr}.control-card{align-items:flex-start}.header-inner{align-items:flex-start}}
+</style>
+</head>
+<body>
+<header>
+  <div class="header-inner">
+    <div><div class="kicker">ESP32 · MQTT · IOT DASHBOARD</div><h1>Hệ thống giám sát báo cháy</h1><p>Theo dõi khí gas, khói và nhiệt độ theo thời gian thực</p></div>
+    <div class="connection"><span class="dot" id="dot"></span><span id="connection">Đang khởi tạo...</span></div>
+  </div>
+</header>
+<main>
+  <div class="section-head"><h2>1. Dữ liệu cảm biến</h2><p>Giá trị cập nhật khi nhận được tin nhắn từ MQTT Broker.</p></div>
+  <section class="cards">
+    <article class="card">
+      <div class="card-top"><div class="icon">☁️</div><div class="label">Nồng độ khí gas / khói (MQ-2)</div></div>
+      <div class="value gas"><span id="gasValue">--</span></div>
+      <div class="hint">Giá trị ADC thô (0–4095), không quy đổi trực tiếp sang ppm</div>
+    </article>
+    <article class="card">
+      <div class="card-top"><div class="icon">🌡️</div><div class="label">Nhiệt độ (DHT22)</div></div>
+      <div class="value temp"><span id="tempValue">--</span><span style="font-size:20px"> °C</span></div>
+      <div class="hint">Cập nhật lần cuối: <span id="updated">chưa có dữ liệu</span></div>
+    </article>
+  </section>
+  <section class="panel" style="margin-top:14px">
+    <strong>Trạng thái cảnh báo:</strong>
+    <span class="state" id="alarmState">Chưa có dữ liệu</span>
+  </section>
+
+  <div class="section-head"><h2>2. Biểu đồ thời gian thực</h2><p>Hiển thị tối đa 20 mẫu dữ liệu gần nhất trong phiên mở trang.</p></div>
+  <section class="charts">
+    <article class="card chart-card"><h3 class="chart-title">Nồng độ khí gas / khói</h3><div class="chart-wrap"><canvas id="gasChart"></canvas></div></article>
+    <article class="card chart-card"><h3 class="chart-title">Nhiệt độ môi trường (°C)</h3><div class="chart-wrap"><canvas id="tempChart"></canvas></div></article>
+  </section>
+
+  <div class="section-head"><h2>3. Chế độ vận hành hệ thống</h2><p>Chọn chế độ Tự động (Auto) hoặc Thủ công (Manual).</p></div>
+  <section class="controls" style="grid-template-columns:1fr">
+    <article class="card control-card">
+      <div><div class="control-name">⚙️ Chế độ hoạt động</div><span class="state" id="modeState">Trạng thái: chưa xác định</span></div>
+      <div class="actions">
+        <button id="btnAuto" class="mode-btn" onclick="setMode('AUTO')">AUTO</button>
+        <button id="btnManual" class="mode-btn" onclick="setMode('MANUAL')">MANUAL</button>
+      </div>
+    </article>
+  </section>
+
+  <div class="section-head"><h2>4. Điều khiển cơ cấu chấp hành</h2><p>Nút gửi lệnh MQTT tới ESP32 (chỉ khả dụng ở chế độ Manual).</p></div>
+  <section class="controls">
+    <article class="card control-card">
+      <div><div class="control-name">💧 Máy bơm</div><span class="state" id="pumpState">Trạng thái: chưa xác định</span></div>
+      <div class="actions">
+        <button class="on manual-action" onclick="sendCommand('pump','ON')">BẬT BƠM</button>
+        <button class="off manual-action" onclick="sendCommand('pump','OFF')">TẮT BƠM</button>
+      </div>
+    </article>
+    <article class="card control-card">
+      <div><div class="control-name">🌀 Quạt thông gió</div><span class="state" id="fanState">Trạng thái: chưa xác định</span></div>
+      <div class="actions">
+        <button class="on manual-action" onclick="sendCommand('fan','ON')">BẬT QUẠT</button>
+        <button class="off manual-action" onclick="sendCommand('fan','OFF')">TẮT QUẠT</button>
+      </div>
+    </article>
+  </section>
+
+  <div class="section-head"><h2>5. Cấu hình kết nối</h2><p>Broker và tiền tố topic phải trùng với chương trình ESP32.</p></div>
+  <section class="panel">
+    <div class="fields">
+      <div><label for="brokerUrl">Broker WebSocket URL</label><input id="brokerUrl" value="ws://broker.hivemq.com:8000/mqtt"></div>
+      <div><label for="prefix">Tiền tố topic</label><input id="prefix" value="home/fire"></div>
+    </div>
+    <div class="actions" style="margin-top:13px"><button class="primary" onclick="connectBroker()">KẾT NỐI / ÁP DỤNG</button><button class="neutral" onclick="disconnectBroker()">NGẮT KẾT NỐI</button></div>
+    <p class="note">Nếu trang được mở bằng HTTPS, trình duyệt có thể chặn WebSocket không mã hóa (ws://). Khi đó cần dùng địa chỉ WSS phù hợp với broker. Broker công khai chỉ dành cho thử nghiệm, không dùng cho hệ thống báo cháy thực tế. Giao diện chỉ gửi lệnh; trạng thái thiết bị được cập nhật theo phản hồi từ ESP32.</p>
+    <div class="log" id="log">Sẵn sàng kết nối MQTT.</div>
+  </section>
+</main>
+<footer>Giao diện đồ án IoT — chỉ phục vụ học tập và mô phỏng.</footer>
+
+<script>
+let mqttClient = null;
+let topic = {};
+let currentMode = 'UNKNOWN'; // Chưa cho phép điều khiển trước khi nhận trạng thái ESP32
+const $ = id => document.getElementById(id);
+const historyLimit = 20;
+
+function addLog(msg) {
+  $('log').textContent = `[${new Date().toLocaleTimeString('vi-VN')}] ${msg}\n` + $('log').textContent;
+}
+function setStatus(msg, color) {
+  $('connection').textContent = msg;
+  $('dot').style.background = color;
+}
+function createTopics(prefix) {
+  const p = prefix.trim().replace(/\/+$/, '');
+  return {
+    gas: `${p}/gas`,
+    temp: `${p}/temperature`,
+    pumpSet: `${p}/pump/set`,
+    fanSet: `${p}/fan/set`,
+    pumpState: `${p}/pump/state`,
+    fanState: `${p}/fan/state`,
+    modeSet: `${p}/mode/set`,
+    modeState: `${p}/mode/state`,
+    alarm: `${p}/alarm`
+  };
+}
+function createChart(canvasId, label, color, unit) {
+  return new Chart($(canvasId), {
+    type: 'line',
+    data: { labels: [], datasets: [{
+      label, data: [], borderColor: color, backgroundColor: color + '22',
+      fill: true, tension: 0.25, pointRadius: 2, borderWidth: 2
+    }]},
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { title: { display: true, text: 'Thời gian' } },
+        y: { beginAtZero: true, title: { display: true, text: unit } }
+      }
+    }
+  });
+}
+const gasChart = createChart('gasChart', 'Khí gas / khói', '#e47724', 'ADC');
+const tempChart = createChart('tempChart', 'Nhiệt độ', '#2878d0', '°C');
+
+function appendPoint(chart, value) {
+  const now = new Date().toLocaleTimeString('vi-VN');
+  chart.data.labels.push(now);
+  chart.data.datasets[0].data.push(value);
+  while (chart.data.labels.length > historyLimit) {
+    chart.data.labels.shift();
+    chart.data.datasets[0].data.shift();
+  }
+  chart.update('none');
+}
+
+function updateModeUI(mode) {
+  currentMode = mode.toUpperCase();
+  const isAuto = currentMode === 'AUTO';
+  const modeKnown = currentMode === 'AUTO' || currentMode === 'MANUAL';
+  
+  // Highlight nút đang chọn
+  $('btnAuto').classList.toggle('active', isAuto);
+  $('btnManual').classList.toggle('active', !isAuto);$('modeState').textContent = 'Trạng thái: ' + currentMode;
+
+  // Vô hiệu hóa hoặc mở khóa các nút điều khiển thiết bị
+  const manualButtons = document.querySelectorAll('.manual-action');
+  manualButtons.forEach(btn => {
+    btn.disabled = isAuto || !modeKnown;
+  });
+}
+
+function connectBroker() {
+  if (typeof mqtt === 'undefined') {
+    addLog('Không tải được MQTT.js. Kiểm tra Internet hoặc CDN.');
+    return;
+  }
+  if (mqttClient) {
+    try { mqttClient.end(true); } catch (e) {}
+    mqttClient = null;
+  }
+  topic = createTopics($('prefix').value || 'home/fire');
+  const url = $('brokerUrl').value.trim();
+  setStatus('Đang kết nối...', '#f59e0b');
+  addLog('Kết nối tới ' + url);
+  mqttClient = mqtt.connect(url, {
+    clientId: 'iot_dashboard_' + Math.random().toString(16).slice(2, 10),
+    clean: true, keepalive: 60, connectTimeout: 15000, reconnectPeriod: 3000
+  });
+  mqttClient.on('connect', () => {
+    setStatus('Đã kết nối Broker', '#22c55e');
+    addLog('Kết nối MQTT thành công.');
+    mqttClient.subscribe([topic.gas, topic.temp, topic.pumpState, topic.fanState, topic.modeState, topic.alarm], err => {
+      if (err) addLog('Lỗi subscribe: ' + err.message);
+      else addLog('Đã đăng ký các topic dữ liệu và trạng thái.');
+    });
+  });
+  mqttClient.on('reconnect', () => setStatus('Đang kết nối lại...', '#f59e0b'));
+  mqttClient.on('offline', () => setStatus('Broker ngoại tuyến', '#ef4444'));
+  mqttClient.on('close', () => setStatus('Đã ngắt kết nối', '#ef4444'));
+  mqttClient.on('error', err => addLog('MQTT error: ' + err.message));
+  mqttClient.on('message', (receivedTopic, payload) => {
+    const value = payload.toString().trim();
+    addLog(`Nhận ${receivedTopic}: ${value}`);
+    if (receivedTopic === topic.gas) {
+      $('gasValue').textContent = value;
+      const n = Number(value);
+      if (Number.isFinite(n)) appendPoint(gasChart, n);
+    } else if (receivedTopic === topic.temp) {
+      $('tempValue').textContent = value;
+      $('updated').textContent = new Date().toLocaleTimeString('vi-VN');
+      const n = Number(value);
+      if (Number.isFinite(n)) appendPoint(tempChart, n);
+    } else if (receivedTopic === topic.pumpState) {
+      $('pumpState').textContent = 'Trạng thái: ' + value;
+    } else if (receivedTopic === topic.fanState) {
+      $('fanState').textContent = 'Trạng thái: ' + value;
+    } else if (receivedTopic === topic.modeState) {
+      updateModeUI(value);
+    } else if (receivedTopic === topic.alarm) {
+      $('alarmState').textContent = value;
+      $('alarmState').style.background = value === 'ALARM' ? '#fee2e2' : '#dcfce7';
+      $('alarmState').style.color = value === 'ALARM' ? '#991b1b' : '#166534';
+    }
+  });
+}
+
+function setMode(mode) {
+  if (!mqttClient || !mqttClient.connected) {
+    alert('Chưa kết nối Broker. Hãy kết nối trước.');
+    return;
+  }
+  mqttClient.publish(topic.modeSet, mode, { qos: 0, retain: false }, err => {
+    if (err) addLog('Gửi lệnh đổi chế độ lỗi: ' + err.message);
+    else {
+      addLog(`Đã gửi yêu cầu chuyển sang chế độ ${mode}`);
+      updateModeUI(mode); // Cập nhật giao diện tạm thời
+    }
+  });
+}
+
+function sendCommand(device, command) {
+  if (currentMode !== 'MANUAL') {
+    alert('Chỉ được điều khiển khi ESP32 đã xác nhận chế độ MANUAL.');
+    return;
+  }
+  if (!mqttClient || !mqttClient.connected) {
+    alert('Chưa kết nối Broker. Hãy kết nối trước.');
+    return;
+  }
+  const dest = device === 'pump' ? topic.pumpSet : topic.fanSet;
+  mqttClient.publish(dest, command, { qos: 0, retain: false }, err => {
+    if (err) addLog('Gửi lệnh lỗi: ' + err.message);
+    else addLog(`Đã gửi lệnh ${command} tới ${dest}`);
+  });
+}
+function disconnectBroker() {
+  if (mqttClient) {
+    mqttClient.end(true);
+    mqttClient = null;
+  }
+  setStatus('Đã ngắt kết nối', '#94a3b8');
+  addLog('Đã ngắt kết nối.');
+}
+connectBroker();
+</script>
+</body>
+</html>
